@@ -92,7 +92,7 @@ mod tests {
             let mut line = Vec::with_capacity(5);
             for j in 0u32..5 {
                 let f_r = cti_multilinear_from_evaluations(
-                    &evals,
+                    &evals.clone(),
                     &[
                         Fr::from_bigint(i.into()).unwrap(),
                         Fr::from_bigint(j.into()).unwrap(),
@@ -107,7 +107,7 @@ mod tests {
             let mut line = Vec::with_capacity(5);
             for j in 0u32..5 {
                 let f_r = vsbw_multilinear_from_evaluations(
-                    &evals,
+                    &evals.clone(),
                     &[
                         Fr::from_bigint(i.into()).unwrap(),
                         Fr::from_bigint(j.into()).unwrap(),

@@ -4,7 +4,7 @@ use ark_ff::Field;
 use ark_poly::{DenseMultilinearExtension, MultilinearExtension};
 
 /// A type of a gate in the Circuit.
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum GateType {
     /// An addition gate.
     Add,
@@ -14,7 +14,7 @@ pub enum GateType {
 }
 
 /// A gate in the Circuit.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Gate {
     /// A type of the gate.
     ttype: GateType,
@@ -31,7 +31,7 @@ impl Gate {
 }
 
 /// A layer of gates in the circuit.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct CircuitLayer {
     layer: Vec<Gate>,
 }
@@ -68,7 +68,7 @@ impl<F: Copy> CircuitEvaluation<F> {
 }
 
 /// The circuit in layered form.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Circuit {
     /// First layer being the output layer, last layer being
     /// the input layer.

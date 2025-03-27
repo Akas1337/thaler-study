@@ -16,6 +16,7 @@ use sum_check_protocol::{
     VerifierRoundResult as SumCheckVerifierRoundResult,
 };
 
+mod circuit_builder;
 mod circuit;
 mod round_polynomial;
 
