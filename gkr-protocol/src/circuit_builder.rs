@@ -1,11 +1,17 @@
 use crate::circuit::{Circuit, Gate, GateType, CircuitLayer};
+use std::collections::{HashSet, HashMap};
 
-
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum CellGateType{
     Add(usize, usize),
     Mul(usize, usize),
     Witness,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum BuildError {
+    DuplicateGate,
+    IllegalGate,
 }
 
 #[derive(Clone, Debug)]
@@ -17,138 +23,156 @@ pub struct Cell{
 
 pub struct CircuitBuilder{
     cells: Vec<Cell>,
+    gatehashset: HashSet<CellGateType>,
     n_layer: usize,
     n_input: usize,
-    n_output: usize,
 }
 
 impl CircuitBuilder {
-    pub fn new(cells: Vec<Cell>, n_layer: usize, n_input: usize, n_output: usize) -> Self {
-        Self{cells, n_layer, n_input, n_output}
+    pub fn new() -> Self {
+        Self{cells: vec![], gatehashset: HashSet::new(), n_layer: 0, n_input: 0}
+    }
+
+    pub fn apply_witness(&mut self) -> usize {
+        let idx = self.cells.len();
+        let cell = Cell {
+            index: idx,
+            layer_id: 0,
+            gate_type: CellGateType::Witness,
+        };
+        self.cells.push(cell);
+        if self.n_layer == 0 {
+            self.n_layer = 1
+        };
+        self.n_input += 1;
+        idx
+    }
+
+    pub fn append_add_gate(&mut self, left: usize, right: usize) -> Result<usize, BuildError> {
+        let gt = CellGateType::Add(left, right);
+        if self.gatehashset.contains(&gt) {
+            Err(BuildError::DuplicateGate)
+        } else if self.cells[left].layer_id != self.cells[right].layer_id {
+            Err(BuildError::IllegalGate)
+        } else {
+            let idx = self.cells.len();
+            let layer = self.cells[left].layer_id + 1;
+            if layer == self.n_layer {
+                self.n_layer += 1
+            }
+            let cell = Cell {
+                index: idx,
+                layer_id: layer,
+                gate_type: gt.clone(),
+            };
+            self.gatehashset.insert(gt);
+            self.cells.push(cell);
+            Ok(idx)
+        }
+    }
+
+    pub fn append_mul_gate(&mut self, left: usize, right: usize) -> Result<usize, BuildError> {
+        let gt = CellGateType::Mul(left, right);
+        if self.gatehashset.contains(&gt) {
+            Err(BuildError::DuplicateGate)
+        } else if self.cells[left].layer_id != self.cells[right].layer_id {
+            Err(BuildError::IllegalGate)
+        } else {
+            let idx = self.cells.len();
+            let layer = self.cells[left].layer_id + 1;
+            if layer == self.n_layer {
+                self.n_layer += 1
+            }
+            let cell = Cell {
+                index: idx,
+                layer_id: layer,
+                gate_type: gt.clone(),
+            };
+            self.gatehashset.insert(gt);
+            self.cells.push(cell);
+            Ok(idx)
+        }
     }
 
     pub fn build_circuit(&self) -> Circuit {
-        let mut cells = self.cells.clone();
-        cells.sort_by(|a, b| a.layer_id.cmp(&b.layer_id).then(a.index.cmp(&b.index)));
-        let mut layer_count = vec![];
-        let mut count = 0usize;
-        let mut layer = 0usize;
-        let mut ind = 0usize;
-        while ind < self.cells.len() {
-            let cell = cells[ind].clone();
-            if cell.layer_id == layer {
-                if cell.index != count {
-                    panic!("cell index is not consecutive");
-                }
-                count += 1;
-            } else {
-                if count == 0 {
-                    panic!("have no cell in layer_{}", layer);
-                }
-                layer_count.push(count);
-                count = 0;
-                layer += 1;
-                ind -= 1;
+        let mut queue = vec![];
+        for cell in self.cells.clone() {
+            if cell.layer_id == self.n_layer - 1 {
+                queue.push(cell.clone())
             }
-            ind += 1;
-        }
-        if count == 0 {
-            panic!("have no cell in layer_{}", layer);
-        }
-        layer_count.push(count);
-        if layer_count[0] != self.n_input || layer_count[layer] != self.n_output {
-            panic!("wrong number with input or output");
         }
 
-        let num_inputs = layer_count[0];
         let mut layers = vec![];
-        let mut layer_end = cells.len();
-        for i in 1usize..self.n_layer {
-            let la = self.n_layer - i;
+        let mut hs = HashSet::new();
+        let mut layer_index = HashMap::new();
+        for _ in 1usize..self.n_layer {
+            let mut cells = vec![];
+            let n = queue.len();
+            for i in 0usize..n {
+                let cell = queue[i].clone();
+                cells.push(cell.clone());
+                let (l, r) = match cell.gate_type {
+                    CellGateType::Add(x, y) => (x, y),
+                    CellGateType::Mul(x, y) => (x, y),
+                    CellGateType::Witness => panic!("witness only in layer_0")
+                };
+                if !hs.contains(&l) {
+                    hs.insert(l);
+                    queue.push(self.cells[l].clone())
+                }
+                if !hs.contains(&r) {
+                    hs.insert(r);
+                    queue.push(self.cells[r].clone())
+                }
+            }
+
+            let newlen = queue.len();
+            queue = queue[n..newlen].to_vec();
+            queue.sort_by(|a, b| a.index.cmp(&b.index));
+            for i in 0usize..queue.len() {
+                layer_index.insert(queue[i].index, i);
+            }
+
             let mut layer = vec![];
-            for j in layer_end - layer_count[la]..layer_end {
-                match cells[j].gate_type {
-                    CellGateType::Witness => {panic!("exist witness cell in layer_{}", la);},
+            for cell in cells {
+                match cell.gate_type {
                     CellGateType::Add(l, r) => {
-                        if l >= layer_count[la-1] || r >= layer_count[la-1] {
-                            panic!("no enough cell in layer_{}", la-1);
-                        }
-                        layer.push(Gate::new(GateType::Add, [l, r]))
+                        layer.push(Gate::new(GateType::Add, [layer_index[&l], layer_index[&r]]));
                     },
                     CellGateType::Mul(l, r) => {
-                        if l >= layer_count[la-1] || r >= layer_count[la-1] {
-                            panic!("no enough cell in layer_{}", la-1);
-                        }
-                        layer.push(Gate::new(GateType::Mul, [l, r]))
+                        layer.push(Gate::new(GateType::Mul, [layer_index[&l], layer_index[&r]]));
                     },
+                    CellGateType::Witness => panic!("witness only in layer_0")
                 }
             }
             layers.push(CircuitLayer::new(layer));
-            layer_end -= layer_count[la];
         }
+
+        let num_inputs = queue.len();
         Circuit::new(layers, num_inputs)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{CellGateType, Cell, CircuitBuilder};
+    use super::{CircuitBuilder, BuildError};
     use crate::circuit::{Circuit, Gate, GateType, CircuitLayer};
 
+    //normal circuit check
     #[test]
     fn test_circuit_build() {
-        let mut cells = vec![];
-        cells.push(Cell {
-            index: 0,
-            layer_id: 2,
-            gate_type: CellGateType::Mul(0, 1),
-        });
-        cells.push(Cell {
-            index: 1,
-            layer_id: 2,
-            gate_type: CellGateType::Mul(2, 3),
-        });
-        cells.push(Cell {
-            index: 0,
-            layer_id: 1,
-            gate_type: CellGateType::Mul(0, 0),
-        });
-        cells.push(Cell {
-            index: 1,
-            layer_id: 1,
-            gate_type: CellGateType::Mul(1, 1),
-        });cells.push(Cell {
-            index: 2,
-            layer_id: 1,
-            gate_type: CellGateType::Mul(1, 2),
-        });
-        cells.push(Cell {
-            index: 3,
-            layer_id: 1,
-            gate_type: CellGateType::Mul(3, 3),
-        });
-        cells.push(Cell {
-            index: 0,
-            layer_id: 0,
-            gate_type: CellGateType::Witness,
-        });
-        cells.push(Cell {
-            index: 1,
-            layer_id: 0,
-            gate_type: CellGateType::Witness,
-        });
-        cells.push(Cell {
-            index: 2,
-            layer_id: 0,
-            gate_type: CellGateType::Witness,
-        });
-        cells.push(Cell {
-            index: 3,
-            layer_id: 0,
-            gate_type: CellGateType::Witness,
-        });
+        let mut builder = CircuitBuilder::new();
+        let w0 = builder.apply_witness();
+        let w1 = builder.apply_witness();
+        let w2 = builder.apply_witness();
+        let w3 = builder.apply_witness();
+        let v0 = builder.append_mul_gate(w0, w0).unwrap();
+        let v1 = builder.append_mul_gate(w1, w1).unwrap();
+        let v2 = builder.append_mul_gate(w1, w2).unwrap();
+        let v3 = builder.append_mul_gate(w3, w3).unwrap();
+        let _ = builder.append_mul_gate(v0, v1);
+        let _ = builder.append_mul_gate(v2, v3);
 
-        let builder = CircuitBuilder::new(cells, 3, 4, 2);
         let c = builder.build_circuit();
         let c0 = Circuit::new(vec![CircuitLayer::new(vec![Gate::new(GateType::Mul, [0, 1]), Gate::new(GateType::Mul, [2, 3])]),
         CircuitLayer::new(vec![Gate::new(GateType::Mul, [0, 0]), Gate::new(GateType::Mul, [1, 1]), Gate::new(GateType::Mul, [1, 2]), Gate::new(GateType::Mul, [3, 3])]),]
@@ -156,293 +180,87 @@ mod tests {
         assert_eq!(c, c0);
     }
 
+    //change cell order and gate type
     #[test]
-    #[should_panic(expected = "cell index is not consecutive")]
-    fn test_circuit_build_panic1() {
-        let mut cells = vec![];
-        cells.push(Cell {
-            index: 0,
-            layer_id: 2,
-            gate_type: CellGateType::Mul(0, 1),
-        });
-        cells.push(Cell {
-            index: 1,
-            layer_id: 2,
-            gate_type: CellGateType::Mul(2, 3),
-        });
-        cells.push(Cell {
-            index: 0,
-            layer_id: 1,
-            gate_type: CellGateType::Mul(0, 0),
-        });
-        cells.push(Cell {
-            index: 1,
-            layer_id: 1,
-            gate_type: CellGateType::Mul(1, 1),
-        });cells.push(Cell {
-            index: 2,
-            layer_id: 1,
-            gate_type: CellGateType::Mul(1, 2),
-        });
-        cells.push(Cell {
-            index: 6,
-            layer_id: 1,
-            gate_type: CellGateType::Mul(3, 3),
-        });
-        cells.push(Cell {
-            index: 0,
-            layer_id: 0,
-            gate_type: CellGateType::Witness,
-        });
-        cells.push(Cell {
-            index: 1,
-            layer_id: 0,
-            gate_type: CellGateType::Witness,
-        });
-        cells.push(Cell {
-            index: 2,
-            layer_id: 0,
-            gate_type: CellGateType::Witness,
-        });
-        cells.push(Cell {
-            index: 3,
-            layer_id: 0,
-            gate_type: CellGateType::Witness,
-        });
+    fn test_circuit_build2() {
+        let mut builder = CircuitBuilder::new();
+        let w0 = builder.apply_witness();
+        let v0 = builder.append_add_gate(w0, w0).unwrap();
+        let w1 = builder.apply_witness();
+        let v1 = builder.append_add_gate(w1, w1).unwrap();
+        let _ = builder.append_mul_gate(v0, v1);
+        let w2 = builder.apply_witness();
+        let v2 = builder.append_mul_gate(w1, w2).unwrap();
+        let w3 = builder.apply_witness();
+        let v3 = builder.append_add_gate(w3, w3).unwrap();
+        let _ = builder.append_add_gate(v2, v3);
 
-        let builder = CircuitBuilder::new(cells, 3, 4, 2);
-        let _ = builder.build_circuit();
+        let c = builder.build_circuit();
+        let c0 = Circuit::new(vec![CircuitLayer::new(vec![Gate::new(GateType::Mul, [0, 1]), Gate::new(GateType::Add, [2, 3])]),
+        CircuitLayer::new(vec![Gate::new(GateType::Add, [0, 0]), Gate::new(GateType::Add, [1, 1]), Gate::new(GateType::Mul, [1, 2]), Gate::new(GateType::Add, [3, 3])]),]
+        ,4);
+        assert_eq!(c, c0);
     }
 
+    //Some cells not contribute to outputs will be ignore
     #[test]
-    #[should_panic(expected = "have no cell in layer_2")]
-    fn test_circuit_build_panic2() {
-        let mut cells = vec![];
-        cells.push(Cell {
-            index: 0,
-            layer_id: 3,
-            gate_type: CellGateType::Mul(0, 1),
-        });
-        cells.push(Cell {
-            index: 1,
-            layer_id: 3,
-            gate_type: CellGateType::Mul(2, 3),
-        });
-        cells.push(Cell {
-            index: 0,
-            layer_id: 1,
-            gate_type: CellGateType::Mul(0, 0),
-        });
-        cells.push(Cell {
-            index: 1,
-            layer_id: 1,
-            gate_type: CellGateType::Mul(1, 1),
-        });cells.push(Cell {
-            index: 2,
-            layer_id: 1,
-            gate_type: CellGateType::Mul(1, 2),
-        });
-        cells.push(Cell {
-            index: 3,
-            layer_id: 1,
-            gate_type: CellGateType::Mul(3, 3),
-        });
-        cells.push(Cell {
-            index: 0,
-            layer_id: 0,
-            gate_type: CellGateType::Witness,
-        });
-        cells.push(Cell {
-            index: 1,
-            layer_id: 0,
-            gate_type: CellGateType::Witness,
-        });
-        cells.push(Cell {
-            index: 2,
-            layer_id: 0,
-            gate_type: CellGateType::Witness,
-        });
-        cells.push(Cell {
-            index: 3,
-            layer_id: 0,
-            gate_type: CellGateType::Witness,
-        });
+    fn test_circuit_build3() {
+        let mut builder = CircuitBuilder::new();
+        let w0 = builder.apply_witness();
+        let w1 = builder.apply_witness();
+        let w2 = builder.apply_witness();
+        let w3 = builder.apply_witness();
+        let w4 = builder.apply_witness(); //ignored
+        let v0 = builder.append_mul_gate(w0, w0).unwrap();
+        let v1 = builder.append_mul_gate(w1, w1).unwrap();
+        let v1_1 = builder.append_mul_gate(w0, w2).unwrap(); //ignored
+        let v2 = builder.append_mul_gate(w1, w2).unwrap();
+        let v3 = builder.append_mul_gate(w3, w3).unwrap();
+        let _ = builder.append_mul_gate(v0, v1);
+        let v5 = builder.append_mul_gate(w1, w4).unwrap(); //ignored
+        let _ = builder.append_mul_gate(v2, v3);
 
-        let builder = CircuitBuilder::new(cells, 3, 4, 2);
-        let _ = builder.build_circuit();
+        let c = builder.build_circuit();
+        let c0 = Circuit::new(vec![CircuitLayer::new(vec![Gate::new(GateType::Mul, [0, 1]), Gate::new(GateType::Mul, [2, 3])]),
+        CircuitLayer::new(vec![Gate::new(GateType::Mul, [0, 0]), Gate::new(GateType::Mul, [1, 1]), Gate::new(GateType::Mul, [1, 2]), Gate::new(GateType::Mul, [3, 3])]),]
+        ,4);
+        assert_eq!(c, c0);
     }
 
+    //error check
     #[test]
-    #[should_panic(expected = "wrong number with input or output")]
-    fn test_circuit_build_panic3() {
-        let mut cells = vec![];
-        cells.push(Cell {
-            index: 0,
-            layer_id: 2,
-            gate_type: CellGateType::Mul(0, 1),
-        });
-        cells.push(Cell {
-            index: 1,
-            layer_id: 2,
-            gate_type: CellGateType::Mul(2, 3),
-        });
-        cells.push(Cell {
-            index: 0,
-            layer_id: 1,
-            gate_type: CellGateType::Mul(0, 0),
-        });
-        cells.push(Cell {
-            index: 1,
-            layer_id: 1,
-            gate_type: CellGateType::Mul(1, 1),
-        });cells.push(Cell {
-            index: 2,
-            layer_id: 1,
-            gate_type: CellGateType::Mul(1, 2),
-        });
-        cells.push(Cell {
-            index: 3,
-            layer_id: 1,
-            gate_type: CellGateType::Mul(3, 3),
-        });
-        cells.push(Cell {
-            index: 0,
-            layer_id: 0,
-            gate_type: CellGateType::Witness,
-        });
-        cells.push(Cell {
-            index: 1,
-            layer_id: 0,
-            gate_type: CellGateType::Witness,
-        });
-        cells.push(Cell {
-            index: 2,
-            layer_id: 0,
-            gate_type: CellGateType::Witness,
-        });
-        cells.push(Cell {
-            index: 3,
-            layer_id: 0,
-            gate_type: CellGateType::Witness,
-        });
-
-        let builder = CircuitBuilder::new(cells, 3, 4, 3);
-        let _ = builder.build_circuit();
+    fn test_circuit_build_error1() {
+        let mut builder = CircuitBuilder::new();
+        let w0 = builder.apply_witness();
+        let w1 = builder.apply_witness();
+        let w2 = builder.apply_witness();
+        let w3 = builder.apply_witness();
+        let v0 = builder.append_mul_gate(w0, w0).unwrap();
+        let v1 = builder.append_mul_gate(w1, w1).unwrap();
+        let v2 = builder.append_mul_gate(w1, w2).unwrap();
+        let v3 = builder.append_mul_gate(w3, w3).unwrap();
+        let _ = builder.append_mul_gate(v0, v1);
+        let _ = builder.append_mul_gate(v2, v3);
+        let err = builder.append_mul_gate(w0, w0).unwrap_err();
+        assert_eq!(err, BuildError::DuplicateGate);
     }
 
+    //error check
     #[test]
-    #[should_panic(expected = "exist witness cell in layer_2")]
-    fn test_circuit_build_panic4() {
-        let mut cells = vec![];
-        cells.push(Cell {
-            index: 0,
-            layer_id: 2,
-            gate_type: CellGateType::Witness,
-        });
-        cells.push(Cell {
-            index: 1,
-            layer_id: 2,
-            gate_type: CellGateType::Mul(2, 3),
-        });
-        cells.push(Cell {
-            index: 0,
-            layer_id: 1,
-            gate_type: CellGateType::Mul(0, 0),
-        });
-        cells.push(Cell {
-            index: 1,
-            layer_id: 1,
-            gate_type: CellGateType::Mul(1, 1),
-        });cells.push(Cell {
-            index: 2,
-            layer_id: 1,
-            gate_type: CellGateType::Mul(1, 2),
-        });
-        cells.push(Cell {
-            index: 3,
-            layer_id: 1,
-            gate_type: CellGateType::Mul(3, 3),
-        });
-        cells.push(Cell {
-            index: 0,
-            layer_id: 0,
-            gate_type: CellGateType::Witness,
-        });
-        cells.push(Cell {
-            index: 1,
-            layer_id: 0,
-            gate_type: CellGateType::Witness,
-        });
-        cells.push(Cell {
-            index: 2,
-            layer_id: 0,
-            gate_type: CellGateType::Witness,
-        });
-        cells.push(Cell {
-            index: 3,
-            layer_id: 0,
-            gate_type: CellGateType::Witness,
-        });
-
-        let builder = CircuitBuilder::new(cells, 3, 4, 2);
-        let _ = builder.build_circuit();
+    fn test_circuit_build_error2() {
+        let mut builder = CircuitBuilder::new();
+        let w0 = builder.apply_witness();
+        let w1 = builder.apply_witness();
+        let w2 = builder.apply_witness();
+        let w3 = builder.apply_witness();
+        let v0 = builder.append_mul_gate(w0, w0).unwrap();
+        let v1 = builder.append_mul_gate(w1, w1).unwrap();
+        let v2 = builder.append_mul_gate(w1, w2).unwrap();
+        let v3 = builder.append_mul_gate(w3, w3).unwrap();
+        let _ = builder.append_mul_gate(v0, v1);
+        let _ = builder.append_mul_gate(v2, v3);
+        let err = builder.append_mul_gate(w2, v3).unwrap_err();
+        assert_eq!(err, BuildError::IllegalGate);
     }
 
-    #[test]
-    #[should_panic(expected = "no enough cell in layer_0")]
-    fn test_circuit_build_panic5() {
-        let mut cells = vec![];
-        cells.push(Cell {
-            index: 0,
-            layer_id: 2,
-            gate_type: CellGateType::Mul(0, 1),
-        });
-        cells.push(Cell {
-            index: 1,
-            layer_id: 2,
-            gate_type: CellGateType::Mul(2, 3),
-        });
-        cells.push(Cell {
-            index: 0,
-            layer_id: 1,
-            gate_type: CellGateType::Mul(0, 0),
-        });
-        cells.push(Cell {
-            index: 1,
-            layer_id: 1,
-            gate_type: CellGateType::Mul(1, 8),
-        });cells.push(Cell {
-            index: 2,
-            layer_id: 1,
-            gate_type: CellGateType::Mul(1, 2),
-        });
-        cells.push(Cell {
-            index: 3,
-            layer_id: 1,
-            gate_type: CellGateType::Mul(3, 3),
-        });
-        cells.push(Cell {
-            index: 0,
-            layer_id: 0,
-            gate_type: CellGateType::Witness,
-        });
-        cells.push(Cell {
-            index: 1,
-            layer_id: 0,
-            gate_type: CellGateType::Witness,
-        });
-        cells.push(Cell {
-            index: 2,
-            layer_id: 0,
-            gate_type: CellGateType::Witness,
-        });
-        cells.push(Cell {
-            index: 3,
-            layer_id: 0,
-            gate_type: CellGateType::Witness,
-        });
-
-        let builder = CircuitBuilder::new(cells, 3, 4, 2);
-        let _ = builder.build_circuit();
-    }
 }
